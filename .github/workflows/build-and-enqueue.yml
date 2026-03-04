@@ -30,7 +30,7 @@ jobs:
   build:
     if: github.event_name != 'pull_request'
     needs: [test]
-    uses: ./.github/workflows/build-ghcr.yml
+    uses: BrunoGao/ljwx-stock/.github/workflows/build-ghcr.yml@master
     with:
       image_name: ljwx-stock-qlib-predict
       context: qlib_predict
@@ -42,7 +42,7 @@ jobs:
   enqueue:
     if: github.event_name != 'pull_request'
     needs: [build]
-    uses: ./.github/workflows/enqueue-release.yml
+    uses: BrunoGao/ljwx-stock/.github/workflows/enqueue-release.yml@master
     with:
       service: ljwx-stock-qlib-predict
       env: dev
