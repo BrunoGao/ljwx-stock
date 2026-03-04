@@ -106,12 +106,24 @@ def _call_with_retry(
 
 
 def load_symbol_universe(symbol_limit: int, request_retries: int) -> list[str]:
-    frame = _call_with_retry(
-        fn_name="stock_zh_a_spot_em",
-        fn=ak.stock_zh_a_spot_em,
-        request_retries=request_retries,
-    )
-    code_col = _detect_column(frame, ["代码", "symbol", "代码 "])
+    try:
+        frame = _call_with_retry(
+            fn_name="stock_zh_a_spot_em",
+            fn=ak.stock_zh_a_spot_em,
+            request_retries=request_retries,
+        )
+        code_col = _detect_column(frame, ["代码", "symbol", "代码 "])
+    except RuntimeError:
+        LOGGER.warning(
+            "主代码表接口不可用，切换备用代码源",
+            extra={"source": "stock_info_a_code_name"},
+        )
+        frame = _call_with_retry(
+            fn_name="stock_info_a_code_name",
+            fn=ak.stock_info_a_code_name,
+            request_retries=request_retries,
+        )
+        code_col = _detect_column(frame, ["code", "证券代码", "代码"])
     symbols = [
         str(code).strip()
         for code in frame[code_col].tolist()
@@ -139,15 +151,11 @@ def load_trade_dates_from_index(request_retries: int) -> list[date]:
 
 def decide_window(settings: Settings, today: date) -> DateWindow:
     if settings.run_mode == "backfill":
-        trade_dates = load_trade_dates_from_index(settings.request_retries)
-        eligible = [d for d in trade_dates if d <= today]
-        if not eligible:
-            raise RuntimeError("交易日历为空，无法计算回灌区间")
-        if len(eligible) <= settings.trading_days:
-            start = eligible[0]
-        else:
-            start = eligible[-settings.trading_days]
-        end = eligible[-1]
+        lookback_days = max(
+            int(settings.trading_days * 1.7), settings.trading_days + 90
+        )
+        start = today - timedelta(days=lookback_days)
+        end = today
         return DateWindow(start=start, end=end)
 
     if settings.run_mode == "daily":
