@@ -197,7 +197,33 @@ def fetch_symbol_kline(
                 continue
             break
 
-    raise RuntimeError(f"拉取行情失败 symbol={symbol}: {last_error}")
+    LOGGER.warning(
+        "东财行情接口不可用，切换腾讯接口",
+        extra={"symbol": symbol, "adjust": adjust, "error": str(last_error)},
+    )
+
+    tx_symbol = f"sh{symbol}" if symbol.startswith("6") else f"sz{symbol}"
+    last_tx_error: Exception | None = None
+    for attempt in range(request_retries + 1):
+        try:
+            frame = ak.stock_zh_a_hist_tx(
+                symbol=tx_symbol,
+                start_date=start_str,
+                end_date=end_str,
+                adjust=adjust,
+                timeout=10.0,
+            )
+            return frame
+        except (requests.RequestException, ValueError, RuntimeError) as exc:
+            last_tx_error = exc
+            if attempt < request_retries:
+                time.sleep(0.8 * (attempt + 1))
+                continue
+            break
+
+    raise RuntimeError(
+        f"拉取行情失败 symbol={symbol}: em={last_error}, tx={last_tx_error}"
+    )
 
 
 def convert_frame_to_records(
@@ -211,8 +237,12 @@ def convert_frame_to_records(
     high_col = _detect_column(frame, ["最高", "high"])
     low_col = _detect_column(frame, ["最低", "low"])
     close_col = _detect_column(frame, ["收盘", "close"])
-    vol_col = _detect_column(frame, ["成交量", "volume"])
     amount_col = _detect_column(frame, ["成交额", "amount"])
+    vol_col = (
+        "成交量"
+        if "成交量" in frame.columns
+        else ("volume" if "volume" in frame.columns else None)
+    )
 
     turnover_col = "换手率" if "换手率" in frame.columns else None
     amplitude_col = "振幅" if "振幅" in frame.columns else None
@@ -246,7 +276,7 @@ def convert_frame_to_records(
                 high=_to_decimal(row.get(high_col)),
                 low=_to_decimal(row.get(low_col)),
                 close=_to_decimal(row.get(close_col)),
-                volume=_to_int(row.get(vol_col)),
+                volume=_to_int(row.get(vol_col)) if vol_col else None,
                 amount=_to_decimal(row.get(amount_col)),
                 turnover=turnover_value,
                 amplitude=amplitude_value,
