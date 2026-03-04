@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -75,8 +76,41 @@ def _to_int(value: object) -> int | None:
     return int(Decimal(text))
 
 
-def load_symbol_universe(symbol_limit: int) -> list[str]:
-    frame = ak.stock_zh_a_spot_em()
+def _call_with_retry(
+    fn_name: str,
+    fn: Callable[[], pd.DataFrame],
+    request_retries: int,
+) -> pd.DataFrame:
+    last_error: Exception | None = None
+    for attempt in range(request_retries + 1):
+        try:
+            return fn()
+        except (requests.RequestException, ValueError, RuntimeError) as exc:
+            last_error = exc
+            if attempt < request_retries:
+                sleep_seconds = 1.0 * (attempt + 1)
+                LOGGER.warning(
+                    "上游接口调用失败，准备重试",
+                    extra={
+                        "function": fn_name,
+                        "attempt": attempt + 1,
+                        "max_attempts": request_retries + 1,
+                        "sleep_seconds": sleep_seconds,
+                        "error": str(exc),
+                    },
+                )
+                time.sleep(sleep_seconds)
+                continue
+            break
+    raise RuntimeError(f"{fn_name} 调用失败: {last_error}")
+
+
+def load_symbol_universe(symbol_limit: int, request_retries: int) -> list[str]:
+    frame = _call_with_retry(
+        fn_name="stock_zh_a_spot_em",
+        fn=ak.stock_zh_a_spot_em,
+        request_retries=request_retries,
+    )
     code_col = _detect_column(frame, ["代码", "symbol", "代码 "])
     symbols = [
         str(code).strip()
@@ -89,8 +123,12 @@ def load_symbol_universe(symbol_limit: int) -> list[str]:
     return symbols
 
 
-def load_trade_dates_from_index() -> list[date]:
-    frame = ak.stock_zh_index_daily_em(symbol="sh000001")
+def load_trade_dates_from_index(request_retries: int) -> list[date]:
+    frame = _call_with_retry(
+        fn_name="stock_zh_index_daily_em",
+        fn=lambda: ak.stock_zh_index_daily_em(symbol="sh000001"),
+        request_retries=request_retries,
+    )
     date_col = _detect_column(frame, ["date", "日期"])
     dates = pd.to_datetime(frame[date_col], errors="coerce").dt.date.dropna().tolist()
     unique_dates = sorted(set(dates))
@@ -101,7 +139,7 @@ def load_trade_dates_from_index() -> list[date]:
 
 def decide_window(settings: Settings, today: date) -> DateWindow:
     if settings.run_mode == "backfill":
-        trade_dates = load_trade_dates_from_index()
+        trade_dates = load_trade_dates_from_index(settings.request_retries)
         eligible = [d for d in trade_dates if d <= today]
         if not eligible:
             raise RuntimeError("交易日历为空，无法计算回灌区间")
@@ -217,7 +255,7 @@ def convert_frame_to_records(
 def run_ingest(conn: PgConnection, settings: Settings) -> dict[str, int | str]:
     today = datetime.now().date()
     window = decide_window(settings, today)
-    symbols = load_symbol_universe(settings.symbol_limit)
+    symbols = load_symbol_universe(settings.symbol_limit, settings.request_retries)
 
     total_symbols = len(symbols)
     success_symbols = 0
