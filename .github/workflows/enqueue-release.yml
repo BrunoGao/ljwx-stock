@@ -232,23 +232,18 @@ jobs:
             git commit -m "${PR_TITLE_PREFIX}(${SERVICE}): ${QUEUE_ENTRY_ID}"
             git push origin "${BRANCH}"
 
-            python3 - <<'PY'
-            import os
-            from pathlib import Path
-
-            content = f"""Automated queue enqueue from {os.environ['GITHUB_REPOSITORY']}@{os.environ['SOURCE_SHA_SHORT']}
-
-            - service: `{os.environ['SERVICE']}`
-            - env: `{os.environ['TARGET_ENV']}`
-            - queue id: `{os.environ['QUEUE_ENTRY_ID']}`
-            - source run: [{os.environ['GITHUB_RUN_ID']}](https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']})
-            - ghcr: `{os.environ['GHCR_REF']}`
-
-            This PR only updates `{os.environ['QUEUE_FILE']}` and does not wait for registry replication.
-            Promoter will process queue asynchronously.
-            """
-            Path("/tmp/queue-pr-body.md").write_text(content, encoding="utf-8")
-            PY
+            {
+              echo "Automated queue enqueue from ${GITHUB_REPOSITORY}@${SOURCE_SHA_SHORT}"
+              echo ""
+              echo "- service: \`${SERVICE}\`"
+              echo "- env: \`${TARGET_ENV}\`"
+              echo "- queue id: \`${QUEUE_ENTRY_ID}\`"
+              echo "- source run: [${GITHUB_RUN_ID}](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})"
+              echo "- ghcr: \`${GHCR_REF}\`"
+              echo ""
+              echo "This PR only updates \`${QUEUE_FILE}\` and does not wait for registry replication."
+              echo "Promoter will process queue asynchronously."
+            } > /tmp/queue-pr-body.md
 
             if [[ -n "${PR_BODY_EXTRA}" ]]; then
               {
