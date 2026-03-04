@@ -45,7 +45,7 @@ jobs:
     uses: ./.github/workflows/enqueue-release.yml
     with:
       service: ljwx-stock-qlib-predict
-      env: ${{ github.event_name == 'workflow_dispatch' && inputs.target_env || 'dev' }}
+      env: dev
       ghcr_ref: ${{ needs.build.outputs.ghcr_ref }}
       tag: ${{ needs.build.outputs.tag }}
       source_git_sha: ${{ github.sha }}
