@@ -1,0 +1,179 @@
+name: build-ghcr
+
+on:
+  workflow_call:
+    inputs:
+      image_name:
+        description: "Image name. If contains '/', treated as full GHCR path suffix; otherwise ghcr.io/<owner>/<repo>/<image_name>."
+        required: true
+        type: string
+      context:
+        description: "Docker build context"
+        required: false
+        default: "."
+        type: string
+      dockerfile:
+        description: "Dockerfile path"
+        required: false
+        default: "Dockerfile"
+        type: string
+      platforms:
+        description: "Target platforms"
+        required: false
+        default: "linux/amd64"
+        type: string
+      push_latest:
+        description: "Also push latest tag"
+        required: false
+        default: false
+        type: boolean
+      extra_tags:
+        description: "Extra tags, separated by comma/space/newline"
+        required: false
+        default: ""
+        type: string
+      build_args:
+        description: "Build args, newline format KEY=VALUE"
+        required: false
+        default: ""
+        type: string
+      target:
+        description: "Optional Docker build target"
+        required: false
+        default: ""
+        type: string
+    secrets:
+      registry_token:
+        description: "Optional token for GHCR login; defaults to github.token"
+        required: false
+    outputs:
+      image:
+        description: "Resolved image repository (without tag/digest)"
+        value: ${{ jobs.build.outputs.image }}
+      digest:
+        description: "Built image digest"
+        value: ${{ jobs.build.outputs.digest }}
+      ghcr_ref:
+        description: "Immutable image reference image@sha256"
+        value: ${{ jobs.build.outputs.ghcr_ref }}
+      tag:
+        description: "sha tag (sha-<short_sha>)"
+        value: ${{ jobs.build.outputs.tag }}
+      branch_tag:
+        description: "branch tag (branch-<safe_branch>)"
+        value: ${{ jobs.build.outputs.branch_tag }}
+      short_sha:
+        description: "Short git sha"
+        value: ${{ jobs.build.outputs.short_sha }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      digest: ${{ steps.pack.outputs.digest }}
+      ghcr_ref: ${{ steps.pack.outputs.ghcr_ref }}
+      tag: ${{ steps.meta.outputs.sha_tag }}
+      branch_tag: ${{ steps.meta.outputs.branch_tag }}
+      short_sha: ${{ steps.meta.outputs.short_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve metadata
+        id: meta
+        shell: bash
+        env:
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+          INPUT_PUSH_LATEST: ${{ inputs.push_latest }}
+          INPUT_EXTRA_TAGS: ${{ inputs.extra_tags }}
+        run: |
+          set -euo pipefail
+
+          SHORT_SHA="${GITHUB_SHA::7}"
+          SAFE_BRANCH="$(echo "${GITHUB_REF_NAME}" | tr '[:upper:]' '[:lower:]' | sed 's#[^a-z0-9._-]#-#g')"
+          REPOSITORY_LOWER="$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          IMAGE_NAME_LOWER="$(echo "${INPUT_IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')"
+
+          if [[ "${IMAGE_NAME_LOWER}" == *"/"* ]]; then
+            IMAGE="ghcr.io/${IMAGE_NAME_LOWER}"
+          else
+            IMAGE="ghcr.io/${REPOSITORY_LOWER}/${IMAGE_NAME_LOWER}"
+          fi
+
+          SHA_TAG="sha-${SHORT_SHA}"
+          BRANCH_TAG="branch-${SAFE_BRANCH}"
+          CACHE_SCOPE="$(echo "${IMAGE_NAME_LOWER}" | sed 's#[^a-z0-9._-]#-#g')"
+
+          tags=(
+            "${IMAGE}:${SHA_TAG}"
+            "${IMAGE}:${BRANCH_TAG}"
+          )
+
+          if [[ "${INPUT_PUSH_LATEST}" == "true" ]]; then
+            tags+=("${IMAGE}:latest")
+          fi
+
+          if [[ -n "${INPUT_EXTRA_TAGS}" ]]; then
+            while IFS= read -r raw_tag; do
+              tag="$(echo "${raw_tag}" | xargs)"
+              if [[ -n "${tag}" ]]; then
+                tags+=("${IMAGE}:${tag}")
+              fi
+            done < <(printf '%s' "${INPUT_EXTRA_TAGS}" | tr ', ' '\n\n')
+          fi
+
+          {
+            echo "short_sha=${SHORT_SHA}"
+            echo "sha_tag=${SHA_TAG}"
+            echo "branch_tag=${BRANCH_TAG}"
+            echo "image=${IMAGE}"
+            echo "cache_scope=${CACHE_SCOPE}"
+            echo "tags<<EOF"
+            printf '%s\n' "${tags[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.registry_token != '' && secrets.registry_token || github.token }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          platforms: ${{ inputs.platforms }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: ${{ inputs.build_args }}
+          target: ${{ inputs.target }}
+          cache-from: type=gha,scope=${{ steps.meta.outputs.cache_scope }}
+          cache-to: type=gha,scope=${{ steps.meta.outputs.cache_scope }},mode=max
+
+      - name: Expose outputs
+        id: pack
+        shell: bash
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${DIGEST}" ]]; then
+            echo "build digest is empty" >&2
+            exit 1
+          fi
+          {
+            echo "digest=${DIGEST}"
+            echo "ghcr_ref=${IMAGE}@${DIGEST}"
+          } >> "$GITHUB_OUTPUT"

@@ -1,0 +1,293 @@
+name: enqueue-release
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: "Service key in deploy queue"
+        required: true
+        type: string
+      env:
+        description: "Target environment (dev/demo/prod)"
+        required: true
+        type: string
+      ghcr_ref:
+        description: "Immutable GHCR image ref (image@sha256:...)"
+        required: true
+        type: string
+      tag:
+        description: "Release tag, e.g. sha-abcdef1"
+        required: true
+        type: string
+      source_git_sha:
+        description: "Source commit sha"
+        required: false
+        default: ""
+        type: string
+      deploy_repo:
+        description: "Deploy repo owner/name"
+        required: false
+        default: "BrunoGaoSZ/ljwx-deploy"
+        type: string
+      deploy_ref:
+        description: "Deploy target branch"
+        required: false
+        default: "main"
+        type: string
+      queue_file:
+        description: "Queue file path in deploy repo"
+        required: false
+        default: "release/queue.yaml"
+        type: string
+      open_pr:
+        description: "Use PR mode (recommended)"
+        required: false
+        default: true
+        type: boolean
+      auto_merge_pr:
+        description: "Auto-merge queue PR after creation"
+        required: false
+        default: true
+        type: boolean
+      merge_method:
+        description: "PR merge method: merge/squash/rebase"
+        required: false
+        default: "merge"
+        type: string
+      pr_title_prefix:
+        description: "PR title prefix"
+        required: false
+        default: "queue"
+        type: string
+      pr_body_extra:
+        description: "Additional lines appended to PR body"
+        required: false
+        default: ""
+        type: string
+    secrets:
+      deploy_repo_token:
+        description: "Token with write access to deploy repo"
+        required: true
+    outputs:
+      queue_entry_id:
+        description: "Generated queue entry id"
+        value: ${{ jobs.enqueue.outputs.queue_entry_id }}
+      pr_url:
+        description: "Created PR URL (empty in direct-commit mode)"
+        value: ${{ jobs.enqueue.outputs.pr_url }}
+      merged:
+        description: "Whether PR was auto-merged"
+        value: ${{ jobs.enqueue.outputs.merged }}
+      deploy_commit:
+        description: "Commit sha in deploy repo (best effort)"
+        value: ${{ jobs.enqueue.outputs.deploy_commit }}
+
+jobs:
+  enqueue:
+    runs-on: ubuntu-latest
+    outputs:
+      queue_entry_id: ${{ steps.enqueue.outputs.queue_entry_id }}
+      pr_url: ${{ steps.publish.outputs.pr_url }}
+      merged: ${{ steps.publish.outputs.merged }}
+      deploy_commit: ${{ steps.publish.outputs.deploy_commit }}
+    steps:
+      - name: Validate inputs
+        shell: bash
+        env:
+          INPUT_GHCR_REF: ${{ inputs.ghcr_ref }}
+          INPUT_MERGE_METHOD: ${{ inputs.merge_method }}
+        run: |
+          set -euo pipefail
+
+          if ! [[ "${INPUT_GHCR_REF}" =~ ^ghcr\.io/.+@sha256:[0-9a-f]{64}$ ]]; then
+            echo "invalid ghcr_ref: ${INPUT_GHCR_REF}" >&2
+            exit 1
+          fi
+
+          case "${INPUT_MERGE_METHOD}" in
+            merge|squash|rebase) ;;
+            *)
+              echo "merge_method must be one of: merge|squash|rebase" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Install PyYAML
+        shell: bash
+        run: python3 -m pip install --quiet pyyaml
+
+      - name: Clone deploy repo
+        shell: bash
+        env:
+          DEPLOY_REPO_TOKEN: ${{ secrets.deploy_repo_token }}
+          DEPLOY_REPO: ${{ inputs.deploy_repo }}
+          DEPLOY_REF: ${{ inputs.deploy_ref }}
+        run: |
+          set -euo pipefail
+          git clone "https://x-access-token:${DEPLOY_REPO_TOKEN}@github.com/${DEPLOY_REPO}.git" deploy-repo
+          git -C deploy-repo checkout "${DEPLOY_REF}"
+
+      - name: Enqueue release entry
+        id: enqueue
+        shell: bash
+        env:
+          QUEUE_FILE: ${{ inputs.queue_file }}
+          SERVICE: ${{ inputs.service }}
+          TARGET_ENV: ${{ inputs.env }}
+          GHCR_REF: ${{ inputs.ghcr_ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          SOURCE_GIT_SHA: ${{ inputs.source_git_sha }}
+          FALLBACK_GIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import datetime as dt
+          import os
+          import re
+          from pathlib import Path
+
+          import yaml
+
+          queue_path = Path("deploy-repo") / os.environ["QUEUE_FILE"]
+          if not queue_path.exists():
+              raise SystemExit(f"queue file not found: {queue_path}")
+
+          ghcr_ref = os.environ["GHCR_REF"].strip()
+          m = re.search(r"@(?P<digest>sha256:[0-9a-f]{64})$", ghcr_ref)
+          if not m:
+              raise SystemExit(f"invalid ghcr_ref: {ghcr_ref}")
+
+          source_sha = os.environ["SOURCE_GIT_SHA"].strip() or os.environ["FALLBACK_GIT_SHA"].strip()
+          source_sha_short = source_sha[:7]
+
+          payload = yaml.safe_load(queue_path.read_text(encoding="utf-8")) or {}
+          for key in ("pending", "promoted", "failed", "superseded"):
+              payload.setdefault(key, [])
+
+          now = dt.datetime.now(dt.timezone.utc)
+          created_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+          compact_ts = now.strftime("%Y%m%dT%H%M%SZ")
+          queue_id = f"{compact_ts}-{os.environ['SERVICE']}-{os.environ['RELEASE_TAG']}"
+
+          entry = {
+              "id": queue_id,
+              "service": os.environ["SERVICE"],
+              "env": os.environ["TARGET_ENV"],
+              "source": {
+                  "ghcr": ghcr_ref,
+                  "tag": os.environ["RELEASE_TAG"],
+                  "digest": m.group("digest"),
+                  "gitSha": source_sha_short,
+              },
+              "createdAt": created_at,
+              "status": "pending",
+              "attempts": 0,
+              "lastError": "",
+              "promotedAt": "",
+              "supersededAt": "",
+              "failedAt": "",
+          }
+
+          payload["pending"].append(entry)
+          queue_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+          Path("/tmp/queue-entry-id").write_text(queue_id, encoding="utf-8")
+          Path("/tmp/source-sha-short").write_text(source_sha_short, encoding="utf-8")
+          PY
+
+          {
+            echo "queue_entry_id=$(cat /tmp/queue-entry-id)"
+            echo "source_sha_short=$(cat /tmp/source-sha-short)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Commit and publish queue change
+        id: publish
+        working-directory: deploy-repo
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.deploy_repo_token }}
+          DEPLOY_REPO: ${{ inputs.deploy_repo }}
+          DEPLOY_REF: ${{ inputs.deploy_ref }}
+          QUEUE_FILE: ${{ inputs.queue_file }}
+          SERVICE: ${{ inputs.service }}
+          TARGET_ENV: ${{ inputs.env }}
+          QUEUE_ENTRY_ID: ${{ steps.enqueue.outputs.queue_entry_id }}
+          GHCR_REF: ${{ inputs.ghcr_ref }}
+          SOURCE_SHA_SHORT: ${{ steps.enqueue.outputs.source_sha_short }}
+          OPEN_PR: ${{ inputs.open_pr }}
+          AUTO_MERGE_PR: ${{ inputs.auto_merge_pr }}
+          MERGE_METHOD: ${{ inputs.merge_method }}
+          PR_TITLE_PREFIX: ${{ inputs.pr_title_prefix }}
+          PR_BODY_EXTRA: ${{ inputs.pr_body_extra }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if [[ "${OPEN_PR}" == "true" ]]; then
+            BRANCH="bot/queue-${SERVICE}-${GITHUB_RUN_ID}"
+            git checkout -b "${BRANCH}"
+            git add "${QUEUE_FILE}"
+            git commit -m "${PR_TITLE_PREFIX}(${SERVICE}): ${QUEUE_ENTRY_ID}"
+            git push origin "${BRANCH}"
+
+            cat > /tmp/queue-pr-body.md <<EOF
+            Automated queue enqueue from ${GITHUB_REPOSITORY}@${SOURCE_SHA_SHORT}
+
+            - service: \`${SERVICE}\`
+            - env: \`${TARGET_ENV}\`
+            - queue id: \`${QUEUE_ENTRY_ID}\`
+            - source run: [${GITHUB_RUN_ID}](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})
+            - ghcr: \`${GHCR_REF}\`
+
+            This PR only updates \`${QUEUE_FILE}\` and does not wait for registry replication.
+            Promoter will process queue asynchronously.
+            EOF
+
+            if [[ -n "${PR_BODY_EXTRA}" ]]; then
+              {
+                echo ""
+                echo "${PR_BODY_EXTRA}"
+              } >> /tmp/queue-pr-body.md
+            fi
+
+            PR_URL="$(gh pr create \
+              --repo "${DEPLOY_REPO}" \
+              --title "${PR_TITLE_PREFIX}(${SERVICE}): ${QUEUE_ENTRY_ID}" \
+              --body-file /tmp/queue-pr-body.md \
+              --base "${DEPLOY_REF}" \
+              --head "${BRANCH}")"
+
+            echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
+            echo "merged=false" >> "$GITHUB_OUTPUT"
+
+            if [[ "${AUTO_MERGE_PR}" == "true" ]]; then
+              merge_flag="--merge"
+              if [[ "${MERGE_METHOD}" == "squash" ]]; then
+                merge_flag="--squash"
+              elif [[ "${MERGE_METHOD}" == "rebase" ]]; then
+                merge_flag="--rebase"
+              fi
+
+              gh pr merge "${PR_URL}" --repo "${DEPLOY_REPO}" ${merge_flag} --delete-branch
+              echo "merged=true" >> "$GITHUB_OUTPUT"
+            fi
+
+            sleep 1
+            DEPLOY_COMMIT="$(gh pr view "${PR_URL}" --repo "${DEPLOY_REPO}" --json mergeCommit --jq '.mergeCommit.oid // ""')"
+            echo "deploy_commit=${DEPLOY_COMMIT}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git checkout "${DEPLOY_REF}"
+          git add "${QUEUE_FILE}"
+          git commit -m "queue(${SERVICE}): ${QUEUE_ENTRY_ID}"
+          git push origin "HEAD:${DEPLOY_REF}"
+
+          DEPLOY_COMMIT="$(git rev-parse HEAD)"
+          {
+            echo "pr_url="
+            echo "merged=false"
+            echo "deploy_commit=${DEPLOY_COMMIT}"
+          } >> "$GITHUB_OUTPUT"
