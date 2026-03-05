@@ -25,6 +25,7 @@
    - `apps/stock-etl/base/job-qlib-bootstrap.yaml`
    - `apps/stock-etl/overlays/ljwx-stock/kustomization.yaml`
    - 已将 qlib predict 的“前置检查+安全跳过”逻辑固化进 base 清单。
+   - 已合并 PR：`BrunoGaoSZ/ljwx-deploy#123`（`main`）。
 
 3. 清理历史临时资源（完成）
    - 已删除失败/临时 hotfix Job：
@@ -72,8 +73,8 @@
 
 ## 四、当前剩余待办（非本轮 1~6）
 
-1. 将 `ljwx-deploy` 相关变更合入 ArgoCD 实际跟踪分支（通常为 `main`），避免被自动回滚。
-2. 补充一份 deploy 侧 evidence 记录文件（`evidence/records/*.yaml`）归档本轮正式镜像 digest 与验证日志。
+1. 补充一份 deploy 侧 evidence 记录文件（`evidence/records/*.yaml`）归档本轮正式镜像 digest 与验证日志。
+2. 观察 `BrunoGao/ljwx-stock` 的最新 workflow 运行（head `887d1b0`）是否全部 `success`。
 
 ## 五、维护规则
 
