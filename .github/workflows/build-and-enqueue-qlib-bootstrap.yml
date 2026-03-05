@@ -1,0 +1,64 @@
+name: build-and-enqueue-qlib-bootstrap
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'qlib_bootstrap/**'
+      - '.github/workflows/build-and-enqueue-qlib-bootstrap.yml'
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: 'deploy environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+      - name: Run qlib_bootstrap tests
+        run: |
+          uv run --with-requirements qlib_bootstrap/requirements.txt python -m pytest -q qlib_bootstrap/tests
+
+  build:
+    if: github.event_name != 'pull_request'
+    needs: [test]
+    uses: BrunoGao/ljwx-stock/.github/workflows/build-ghcr.yml@master
+    with:
+      image_name: ljwx-stock-qlib-bootstrap
+      context: qlib_bootstrap
+      dockerfile: qlib_bootstrap/Dockerfile
+      platforms: linux/amd64
+      push_latest: false
+    secrets: inherit
+
+  enqueue:
+    if: github.event_name != 'pull_request'
+    needs: [build]
+    uses: BrunoGao/ljwx-stock/.github/workflows/enqueue-release.yml@master
+    with:
+      service: ljwx-stock-qlib-bootstrap
+      env: dev
+      ghcr_ref: ${{ needs.build.outputs.ghcr_ref }}
+      tag: ${{ needs.build.outputs.tag }}
+      source_git_sha: ${{ github.sha }}
+      deploy_repo: BrunoGaoSZ/ljwx-deploy
+      deploy_ref: main
+      queue_file: release/queue.yaml
+      open_pr: true
+      auto_merge_pr: true
+      merge_method: merge
+      pr_title_prefix: queue
+    secrets:
+      deploy_repo_token: ${{ secrets.DEPLOY_REPO_TOKEN }}
