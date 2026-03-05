@@ -1,6 +1,6 @@
 # Codex 待完成任务清单（持续维护）
 
-更新时间：2026-03-05 14:04 CET
+更新时间：2026-03-05 14:16 CET
 来源：`codex-prompts/P0~P6c.md` + 当前代码实现扫描 + k3s 实际运行结果
 
 ## 一、实施状态总览
@@ -74,7 +74,6 @@
 ## 四、当前剩余待办（非本轮 1~6）
 
 1. 补充一份 deploy 侧 evidence 记录文件（`evidence/records/*.yaml`）归档本轮正式镜像 digest 与验证日志。
-2. 观察 `BrunoGao/ljwx-stock` 的最新 workflow 运行（head `887d1b0`）是否全部 `success`。
 
 ## 五、维护规则
 
