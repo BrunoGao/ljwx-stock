@@ -5,6 +5,7 @@ import time
 from contextlib import asynccontextmanager
 from uuid import UUID, uuid4
 
+from anthropic import AnthropicError
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 
 from app import db
@@ -219,7 +220,7 @@ async def chat(
                 tool_results=result_payload,
             )
             llm_output_tokens = await llm_provider.count_tokens(response_text)
-        except (RuntimeError, ValueError, OSError) as exc:
+        except (RuntimeError, ValueError, OSError, AnthropicError) as exc:
             logger.warning(
                 "LLM 总结失败，使用模板总结",
                 extra={"run_id": str(run_id), "error": str(exc)},
