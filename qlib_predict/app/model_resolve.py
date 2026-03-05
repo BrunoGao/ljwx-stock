@@ -40,8 +40,12 @@ def resolve_artifact_dir(model_root: str, model_date: str) -> Path:
     return artifact_dir
 
 
-def resolve_model_files(model_root: str, model_date_override: str | None) -> dict[str, Path | str]:
-    model_date = resolve_model_date(model_root=model_root, model_date_override=model_date_override)
+def resolve_model_files(
+    model_root: str, model_date_override: str | None
+) -> dict[str, Path | str]:
+    model_date = resolve_model_date(
+        model_root=model_root, model_date_override=model_date_override
+    )
     artifact_dir = resolve_artifact_dir(model_root=model_root, model_date=model_date)
 
     model_pkl = artifact_dir / "model.pkl"
@@ -51,7 +55,9 @@ def resolve_model_files(model_root: str, model_date_override: str | None) -> dic
     if not model_pkl.exists():
         raise FileNotFoundError(f"模型文件缺失: {model_pkl} (需要 model.pkl)")
     if not handler_config.exists():
-        raise FileNotFoundError(f"特征配置缺失: {handler_config} (需要 handler_config.yaml)")
+        raise FileNotFoundError(
+            f"特征配置缺失: {handler_config} (需要 handler_config.yaml)"
+        )
     if not meta_json.exists():
         raise FileNotFoundError(f"模型元数据缺失: {meta_json} (需要 meta.json)")
 

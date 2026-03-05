@@ -55,7 +55,9 @@ def _resolve_predict_date(predict_date_raw: str | None) -> date:
     return date.fromisoformat(str(latest)[:10])
 
 
-def _set_predict_segment(dataset_config: dict[str, object], predict_day: date) -> dict[str, object]:
+def _set_predict_segment(
+    dataset_config: dict[str, object], predict_day: date
+) -> dict[str, object]:
     config_copy = dict(dataset_config)
     kwargs_raw = config_copy.get("kwargs")
     kwargs = dict(kwargs_raw) if isinstance(kwargs_raw, dict) else {}
@@ -66,7 +68,9 @@ def _set_predict_segment(dataset_config: dict[str, object], predict_day: date) -
     return config_copy
 
 
-def _build_dataset_config(handler_config: dict[str, object], predict_day: date) -> dict[str, object]:
+def _build_dataset_config(
+    handler_config: dict[str, object], predict_day: date
+) -> dict[str, object]:
     dataset_raw = handler_config.get("dataset")
     if isinstance(dataset_raw, dict):
         return _set_predict_segment(dataset_raw, predict_day)
@@ -81,7 +85,9 @@ def _build_dataset_config(handler_config: dict[str, object], predict_day: date) 
     }
 
 
-def _prepare_feature_frame(handler_config: dict[str, object], predict_day: date) -> pd.DataFrame:
+def _prepare_feature_frame(
+    handler_config: dict[str, object], predict_day: date
+) -> pd.DataFrame:
     from qlib.data.dataset.handler import DataHandlerLP
     from qlib.utils import init_instance_by_config
 
@@ -154,7 +160,9 @@ def run_prediction(settings: Settings, dry_run: bool = False) -> dict[str, objec
     handler_config = _read_yaml(Path(str(resolved["handler_config"])))
     meta_json = _read_json(Path(str(resolved["meta_json"])))
 
-    feature_df = _prepare_feature_frame(handler_config=handler_config, predict_day=predict_day)
+    feature_df = _prepare_feature_frame(
+        handler_config=handler_config, predict_day=predict_day
+    )
 
     model = joblib.load(Path(str(resolved["model_pkl"])))
     raw_scores = model.predict(feature_df)
@@ -163,14 +171,18 @@ def run_prediction(settings: Settings, dry_run: bool = False) -> dict[str, objec
         raise RuntimeError("模型预测结果长度与特征样本数不一致")
 
     scored_items: list[tuple[str, float]] = []
-    for index_value, raw_score in zip(feature_df.index.tolist(), raw_scores, strict=True):
+    for index_value, raw_score in zip(
+        feature_df.index.tolist(), raw_scores, strict=True
+    ):
         symbol = _extract_symbol(index_value)
         scored_items.append((symbol, float(raw_score)))
 
     scored_items.sort(key=lambda item: item[1], reverse=True)
     top_items = scored_items[: settings.candidate_pool_size]
 
-    featureset_raw = _search_first_value(handler_config, ["featureset", "feature_set", "features"])
+    featureset_raw = _search_first_value(
+        handler_config, ["featureset", "feature_set", "features"]
+    )
     label_raw = _search_first_value(handler_config, ["label", "label_expr", "labels"])
     featureset = "unknown" if featureset_raw is None else str(featureset_raw)
     label = "unknown" if label_raw is None else str(label_raw)
@@ -222,7 +234,9 @@ def run_prediction(settings: Settings, dry_run: bool = False) -> dict[str, objec
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Qlib offline prediction writer")
-    parser.add_argument("--dry-run", action="store_true", help="Only validate model path resolving")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Only validate model path resolving"
+    )
     return parser
 
 

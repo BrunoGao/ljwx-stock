@@ -6,8 +6,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     database_url: str = Field(alias="DATABASE_URL")
-    qlib_provider_uri: str = Field(default="/data/qlib/qlib_data/cn", alias="QLIB_PROVIDER_URI")
-    qlib_model_root: str = Field(default="/data/qlib/artifacts/models", alias="QLIB_MODEL_ROOT")
+    qlib_provider_uri: str = Field(
+        default="/data/qlib/qlib_data/cn", alias="QLIB_PROVIDER_URI"
+    )
+    qlib_model_root: str = Field(
+        default="/data/qlib/artifacts/models", alias="QLIB_MODEL_ROOT"
+    )
     qlib_model_date: str | None = Field(default=None, alias="QLIB_MODEL_DATE")
     predict_date: str | None = Field(default=None, alias="PREDICT_DATE")
     candidate_pool_size: int = Field(default=300, ge=1, alias="CANDIDATE_POOL_SIZE")
