@@ -7,7 +7,7 @@ from app.llm.base import LLMProvider
 from app.models import Plan, PlanStep
 from app.tool_registry import ToolSpec, list_tools
 
-_SYMBOL_PATTERN = re.compile(r"\b(\d{6})\b")
+_SYMBOL_PATTERN = re.compile(r"(?<!\d)(\d{6})(?!\d)")
 
 
 @dataclass(frozen=True)
@@ -23,11 +23,18 @@ def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:
     return any(keyword in text or keyword.lower() in text_lower for keyword in keywords)
 
 
-def _extract_symbol(user_query: str) -> str:
+def _search_symbol(user_query: str) -> str | None:
     match = _SYMBOL_PATTERN.search(user_query)
     if match is None:
-        return "600519"
+        return None
     return match.group(1)
+
+
+def _extract_symbol(user_query: str) -> str:
+    symbol = _search_symbol(user_query)
+    if symbol is None:
+        return "600519"
+    return symbol
 
 
 def _build_market_params(user_query: str) -> dict[str, object]:
@@ -40,10 +47,10 @@ def _build_market_params(user_query: str) -> dict[str, object]:
 
 
 def _build_strategy_params(user_query: str) -> dict[str, object]:
-    symbol_match = _SYMBOL_PATTERN.search(user_query)
-    if symbol_match is None:
+    symbol = _search_symbol(user_query)
+    if symbol is None:
         return {"symbols": None, "end_date": None}
-    return {"symbols": [symbol_match.group(1)], "end_date": None}
+    return {"symbols": [symbol], "end_date": None}
 
 
 def build_rule_based_plan(user_query: str) -> Plan:

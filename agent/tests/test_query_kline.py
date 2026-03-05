@@ -71,3 +71,42 @@ def test_query_kline_fields_empty_uses_default_fields(
     assert isinstance(rows, list)
     assert len(rows) == 1
     assert "close" in rows[0]
+
+
+def test_query_kline_uses_latest_window_and_returns_chronological_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_fetch_rows(
+        query: str,
+        params: tuple[object, ...],
+        timeout_seconds: float,
+    ) -> list[dict[str, object]]:
+        assert "ORDER BY k.trade_date DESC" in query
+        assert params[0] == "000505"
+        assert timeout_seconds > 0
+        return [
+            {
+                "symbol": "000505",
+                "trade_date": date(2026, 3, 5),
+                "adjust": "qfq",
+                "close": 7.23,
+            },
+            {
+                "symbol": "000505",
+                "trade_date": date(2026, 3, 4),
+                "adjust": "qfq",
+                "close": 7.12,
+            },
+        ]
+
+    monkeypatch.setattr(query_kline_module.db, "fetch_rows", fake_fetch_rows)
+
+    result = asyncio.run(
+        query_kline_handler(
+            QueryKlineParams(symbol="000505", fields=["close"], limit=2)
+        )
+    )
+    rows = result.result.get("rows")
+    assert isinstance(rows, list)
+    assert rows[0]["trade_date"] == "2026-03-04"
+    assert rows[1]["trade_date"] == "2026-03-05"

@@ -177,10 +177,10 @@ async def query_kline_handler(params: QueryKlineParams) -> ToolExecutionResult:
           AND k.adjust = $2
           AND ($3::date IS NULL OR k.trade_date >= $3::date)
           AND ($4::date IS NULL OR k.trade_date <= $4::date)
-        ORDER BY k.trade_date ASC
+        ORDER BY k.trade_date DESC
         LIMIT $5
     """
-    records = await db.fetch_rows(
+    records_desc = await db.fetch_rows(
         query=query,
         params=(
             params.symbol,
@@ -191,6 +191,9 @@ async def query_kline_handler(params: QueryKlineParams) -> ToolExecutionResult:
         ),
         timeout_seconds=settings.kline_query_timeout_seconds,
     )
+
+    # Keep output chronological while querying the latest N rows.
+    records = list(reversed(records_desc))
 
     rows: list[dict[str, object]] = []
     for record in records:

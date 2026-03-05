@@ -6,7 +6,7 @@ from app.llm.base import LLMProvider
 from app.models import Plan, PlanStep
 from app.tool_registry import ToolSpec
 
-_SYMBOL_PATTERN = re.compile(r"\\b(\\d{6})\\b")
+_SYMBOL_PATTERN = re.compile(r"(?<!\\d)(\\d{6})(?!\\d)")
 
 
 class MockProvider(LLMProvider):

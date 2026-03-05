@@ -1,4 +1,29 @@
+from __future__ import annotations
+
 from typing import Mapping
+
+
+def _format_number(value: object, digits: int = 2, suffix: str = "") -> str:
+    if value is None:
+        return "N/A"
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return f"{numeric:.{digits}f}{suffix}"
+
+
+def _build_result_note(result: Mapping[str, object]) -> str:
+    if "summary" in result and str(result["summary"]).strip() != "":
+        return str(result["summary"])
+    if "row_count" in result:
+        return f"row_count={result['row_count']}"
+    if "candidate_count" in result and "display_count" in result:
+        return (
+            f"candidate_count={result['candidate_count']}, "
+            f"display_count={result['display_count']}"
+        )
+    return ""
 
 
 def _build_generic_table(step_results: list[dict[str, object]]) -> str:
@@ -13,7 +38,7 @@ def _build_generic_table(step_results: list[dict[str, object]]) -> str:
         result = row.get("result", {})
         note_text = ""
         if isinstance(result, dict):
-            note_text = str(result.get("summary", ""))
+            note_text = _build_result_note(result)
         table_lines.append(f"| {step_index} | {tool_name} | success | {note_text} |")
 
     if len(step_results) == 0:
@@ -34,6 +59,62 @@ def _extract_strategy_result(
         if isinstance(result.get("display_rows"), list):
             return result
     return None
+
+
+def _extract_kline_result(
+    step_results: list[dict[str, object]],
+) -> dict[str, object] | None:
+    for row in step_results:
+        if row.get("tool_name") != "query_kline":
+            continue
+        result = row.get("result")
+        if isinstance(result, dict):
+            return result
+    return None
+
+
+def _resolve_latest_kline_row(
+    rows_raw: list[object],
+) -> Mapping[str, object] | None:
+    latest_row: Mapping[str, object] | None = None
+    latest_trade_date = ""
+    for item in rows_raw:
+        if not isinstance(item, dict):
+            continue
+        trade_date_raw = item.get("trade_date")
+        if trade_date_raw is None:
+            continue
+        trade_date = str(trade_date_raw)
+        if trade_date.strip() == "":
+            continue
+        if trade_date >= latest_trade_date:
+            latest_trade_date = trade_date
+            latest_row = item
+    return latest_row
+
+
+def _build_kline_table(
+    symbol: str,
+    adjust: str,
+    row_count: int,
+    latest_row: Mapping[str, object] | None,
+) -> str:
+    table_lines = [
+        "| Symbol | Adjust | Trade Date | Close | Pct Chg | Row Count |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    if latest_row is None:
+        table_lines.append(f"| {symbol} | {adjust} | N/A | N/A | N/A | {row_count} |")
+        return "\n".join(table_lines)
+
+    trade_date = str(latest_row.get("trade_date", "N/A"))
+    close_text = _format_number(latest_row.get("close"), digits=2)
+    pct_chg_text = _format_number(latest_row.get("pct_chg"), digits=2, suffix="%")
+    table_lines.append(
+        f"| {symbol} | {adjust} | {trade_date} | {close_text} | {pct_chg_text} | "
+        f"{row_count} |",
+    )
+    return "\n".join(table_lines)
 
 
 def _build_strategy_table(strategy_result: Mapping[str, object]) -> str:
@@ -66,11 +147,43 @@ def synthesize_response(
     used_tools: list[str],
     step_results: list[dict[str, object]],
 ) -> str:
+    kline_result = _extract_kline_result(step_results)
     strategy_result = _extract_strategy_result(step_results)
 
-    if strategy_result is None:
+    if kline_result is not None:
+        symbol = str(kline_result.get("symbol", ""))
+        adjust = str(kline_result.get("adjust", ""))
+        rows_raw = kline_result.get("rows")
+        rows = rows_raw if isinstance(rows_raw, list) else []
+        latest_row = _resolve_latest_kline_row(rows)
+        row_count = int(kline_result.get("row_count", len(rows)))
+
+        if latest_row is None:
+            summary_line = (
+                f"已完成请求“{user_query}”的行情查询，"
+                f"股票 {symbol}（{adjust}）未查询到可用行情。"
+            )
+        else:
+            trade_date = str(latest_row.get("trade_date", "N/A"))
+            close_text = _format_number(latest_row.get("close"), digits=2)
+            pct_chg_text = _format_number(
+                latest_row.get("pct_chg"), digits=2, suffix="%"
+            )
+            summary_line = (
+                f"已完成请求“{user_query}”的行情查询。"
+                f"{symbol} 最近交易日 {trade_date}，收盘价 {close_text}，"
+                f"涨跌幅 {pct_chg_text}。"
+            )
+
+        table_markdown = _build_kline_table(
+            symbol=symbol,
+            adjust=adjust,
+            row_count=row_count,
+            latest_row=latest_row,
+        )
+    elif strategy_result is None:
         summary_line = (
-            f"已完成请求“{user_query}”的占位分析，共执行 {len(used_tools)} 个工具："
+            f"已完成请求“{user_query}”的分析，共执行 {len(used_tools)} 个工具："
             f"{', '.join(used_tools) if used_tools else '无'}。"
         )
         table_markdown = _build_generic_table(step_results)
