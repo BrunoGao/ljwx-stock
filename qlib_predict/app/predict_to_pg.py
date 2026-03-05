@@ -6,12 +6,12 @@ from pathlib import Path
 from typing import Iterable
 
 import joblib
-import pandas as pd
 import yaml
 
 from .config import Settings, get_settings
-from .db import build_params_hash, upsert_reco_daily
-from .model_resolve import MODEL_FAMILY, resolve_model_files
+from .db_writer import build_params_hash, write_reco_daily_rows
+from .feature_builder import build_feature_frame
+from .model_loader import MODEL_FAMILY, resolve_model_artifacts
 
 STRATEGY_NAME = "qlib_lightgbm_v1"
 
@@ -55,56 +55,6 @@ def _resolve_predict_date(predict_date_raw: str | None) -> date:
     return date.fromisoformat(str(latest)[:10])
 
 
-def _set_predict_segment(
-    dataset_config: dict[str, object], predict_day: date
-) -> dict[str, object]:
-    config_copy = dict(dataset_config)
-    kwargs_raw = config_copy.get("kwargs")
-    kwargs = dict(kwargs_raw) if isinstance(kwargs_raw, dict) else {}
-
-    predict_day_text = predict_day.isoformat()
-    kwargs["segments"] = {"test": (predict_day_text, predict_day_text)}
-    config_copy["kwargs"] = kwargs
-    return config_copy
-
-
-def _build_dataset_config(
-    handler_config: dict[str, object], predict_day: date
-) -> dict[str, object]:
-    dataset_raw = handler_config.get("dataset")
-    if isinstance(dataset_raw, dict):
-        return _set_predict_segment(dataset_raw, predict_day)
-
-    return {
-        "class": "DatasetH",
-        "module_path": "qlib.data.dataset",
-        "kwargs": {
-            "handler": handler_config,
-            "segments": {"test": (predict_day.isoformat(), predict_day.isoformat())},
-        },
-    }
-
-
-def _prepare_feature_frame(
-    handler_config: dict[str, object], predict_day: date
-) -> pd.DataFrame:
-    from qlib.data.dataset.handler import DataHandlerLP
-    from qlib.utils import init_instance_by_config
-
-    dataset_config = _build_dataset_config(handler_config, predict_day)
-    dataset = init_instance_by_config(dataset_config)
-
-    feature_df = dataset.prepare("test", col_set="feature", data_key=DataHandlerLP.DK_I)
-    if not isinstance(feature_df, pd.DataFrame):
-        feature_df = pd.DataFrame(feature_df)
-
-    feature_df = feature_df.dropna(axis=0, how="any")
-    if feature_df.empty:
-        raise ValueError("预测特征为空，无法执行推理")
-
-    return feature_df
-
-
 def _extract_symbol(index_value: object) -> str:
     if isinstance(index_value, tuple) and len(index_value) >= 2:
         return str(index_value[1])
@@ -136,8 +86,8 @@ def _resolve_model_version(meta: dict[str, object], model_date: str) -> str:
 
 
 def run_prediction(settings: Settings, dry_run: bool = False) -> dict[str, object]:
-    resolved = resolve_model_files(
-        model_root=settings.qlib_model_root,
+    resolved = resolve_model_artifacts(
+        model_root=settings.resolved_model_root,
         model_date_override=settings.qlib_model_date,
     )
 
@@ -152,15 +102,18 @@ def run_prediction(settings: Settings, dry_run: bool = False) -> dict[str, objec
             "model_pkl": str(resolved["model_pkl"]),
             "handler_config": str(resolved["handler_config"]),
             "meta_json": str(resolved["meta_json"]),
+            "provider_uri": settings.resolved_provider_uri,
+            "model_root": settings.resolved_model_root,
+            "predict_date": settings.resolved_predict_date,
         }
 
-    init_qlib(settings.qlib_provider_uri)
+    init_qlib(settings.resolved_provider_uri)
 
-    predict_day = _resolve_predict_date(settings.predict_date)
+    predict_day = _resolve_predict_date(settings.resolved_predict_date)
     handler_config = _read_yaml(Path(str(resolved["handler_config"])))
     meta_json = _read_json(Path(str(resolved["meta_json"])))
 
-    feature_df = _prepare_feature_frame(
+    feature_df = build_feature_frame(
         handler_config=handler_config, predict_day=predict_day
     )
 
@@ -188,8 +141,8 @@ def run_prediction(settings: Settings, dry_run: bool = False) -> dict[str, objec
     label = "unknown" if label_raw is None else str(label_raw)
 
     params = {
-        "provider_uri": settings.qlib_provider_uri,
-        "model_root": settings.qlib_model_root,
+        "provider_uri": settings.resolved_provider_uri,
+        "model_root": settings.resolved_model_root,
         "model_date": model_date,
         "predict_date": predict_day.isoformat(),
         "candidate_pool_size": settings.candidate_pool_size,
@@ -209,7 +162,7 @@ def run_prediction(settings: Settings, dry_run: bool = False) -> dict[str, objec
                 "rank": rank,
                 "reason_json": {
                     "model_date": model_date,
-                    "provider_uri": settings.qlib_provider_uri,
+                    "provider_uri": settings.resolved_provider_uri,
                     "artifact_dir": str(artifact_dir),
                     "featureset": featureset,
                     "label": label,
@@ -221,7 +174,7 @@ def run_prediction(settings: Settings, dry_run: bool = False) -> dict[str, objec
             }
         )
 
-    written_count = upsert_reco_daily(settings.database_url, rows)
+    written_count = write_reco_daily_rows(settings.database_url, rows)
     return {
         "status": "ok",
         "strategy_name": STRATEGY_NAME,

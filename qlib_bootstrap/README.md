@@ -2,6 +2,12 @@
 
 离线 Bootstrap 镜像：从 PostgreSQL 的 `market.kline_daily` 导出 qfq 日线，生成 Qlib provider 数据，训练 LightGBM，并发布到 MinIO。
 
+## 生产部署（GitOps）
+
+- Bootstrap 的 Job/CronJob 与 MinIO Secret 在 `ljwx-deploy/apps/stock-etl/**` 维护
+- 本仓只负责训练/发布逻辑与镜像构建
+- 详见 [`docs/gitops-deployment.md`](../docs/gitops-deployment.md)
+
 ## 环境变量
 
 - `DATABASE_URL`（必填）

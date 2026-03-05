@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Mapping, TYPE_CHECKING
 
 import joblib
+import numpy as np
 import yaml
 
 if TYPE_CHECKING:
@@ -56,6 +57,32 @@ def _split_dates(start_day: date, end_day: date) -> tuple[date, date]:
         raise RuntimeError("无法生成有效的训练/验证时间分段")
 
     return train_end, valid_end
+
+
+def _sanitize_frame(
+    feature_df: pd.DataFrame,
+    label_series: pd.Series,
+    *,
+    fill_values: pd.Series | None,
+) -> tuple[pd.DataFrame, pd.Series, pd.Series]:
+    frame = feature_df.join(label_series.rename("label"), how="inner")
+    frame = frame.replace([np.inf, -np.inf], np.nan).dropna(subset=["label"])
+    if frame.empty:
+        raise RuntimeError("训练/验证数据在过滤无效 label 后为空")
+
+    feature_columns = [column for column in frame.columns if column != "label"]
+    feature_part = frame.loc[:, feature_columns]
+
+    if fill_values is None:
+        fill_values = feature_part.median(axis=0, numeric_only=True)
+
+    feature_part = feature_part.fillna(fill_values).fillna(0.0)
+
+    label_part = frame["label"]
+    if label_part.empty:
+        raise RuntimeError("标签数据为空")
+
+    return feature_part, label_part, fill_values
 
 
 def train_lightgbm(
@@ -145,22 +172,16 @@ def train_lightgbm(
     train_label = _extract_label_series(train_label_raw)
     valid_label = _extract_label_series(valid_label_raw)
 
-    train_frame = train_feature.join(train_label.rename("label"), how="inner").dropna(
-        axis=0, how="any"
+    x_train, y_train, train_fill_values = _sanitize_frame(
+        feature_df=train_feature,
+        label_series=train_label,
+        fill_values=None,
     )
-    valid_frame = valid_feature.join(valid_label.rename("label"), how="inner").dropna(
-        axis=0, how="any"
+    x_valid, y_valid, _ = _sanitize_frame(
+        feature_df=valid_feature,
+        label_series=valid_label,
+        fill_values=train_fill_values,
     )
-
-    if train_frame.empty:
-        raise RuntimeError("训练集为空，无法训练模型")
-    if valid_frame.empty:
-        raise RuntimeError("验证集为空，无法训练模型")
-
-    x_train = train_frame.drop(columns=["label"])
-    y_train = train_frame["label"]
-    x_valid = valid_frame.drop(columns=["label"])
-    y_valid = valid_frame["label"]
 
     train_dataset = lgb.Dataset(x_train.to_numpy(), label=y_train.to_numpy(dtype=float))
     valid_dataset = lgb.Dataset(

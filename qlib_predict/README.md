@@ -2,6 +2,12 @@
 
 离线 Qlib 推理镜像，读取 PVC 上的 `qlib_data/artifacts` 并写入 `market.reco_daily`。
 
+## 生产部署（GitOps）
+
+- 运行时 CronJob/Secret/PVC 清单真源在 `ljwx-deploy/apps/stock-etl/**`
+- 本仓负责代码与镜像构建，部署由 `release queue -> promoter -> ArgoCD` 推进
+- 详见 [`docs/gitops-deployment.md`](../docs/gitops-deployment.md)
+
 ## 目录约定
 
 - `QLIB_PROVIDER_URI` 默认 `/data/qlib/qlib_data/cn`
@@ -33,10 +39,13 @@
 ## 环境变量
 
 - `DATABASE_URL`（required）
-- `QLIB_PROVIDER_URI`（default: `/data/qlib/qlib_data/cn`）
-- `QLIB_MODEL_ROOT`（default: `/data/qlib/artifacts/models`）
+- `QLIB_PROVIDER_URI`（优先，default: unset）
+- `QLIB_MODEL_ROOT`（优先，default: unset）
+- `QLIB_DATA_DIR`（兼容 P3a，default: `/data/qlib/data`；当 `QLIB_PROVIDER_URI` 为空时使用）
+- `MODEL_DIR`（兼容 P3a，default: `/data/qlib/models`；当 `QLIB_MODEL_ROOT` 为空时使用）
 - `QLIB_MODEL_DATE`（optional，覆盖 `LATEST`）
 - `PREDICT_DATE`（optional，默认最近交易日）
+- `PREDICT_TRADE_DATE`（兼容 P3a，`PREDICT_DATE` 为空时生效）
 - `CANDIDATE_POOL_SIZE`（default: `300`）
 - `CODE_VERSION`（default: `unknown`）
 
